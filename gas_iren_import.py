@@ -46,11 +46,6 @@ from typing import List, Optional, Tuple
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
-# ── path_widgets (modulo condiviso) ──────────────────────────────────────────
-import sys as _sys
-_sys.path.insert(0, str(__import__('pathlib').Path.home() /
-    "Library/CloudStorage/Dropbox/Documenti_IRC/Python/shared"))
-# ─────────────────────────────────────────────────────────────────────────────
 from path_widgets import PathVar, PathEntry, log_path
 
 # Silenzia warning pdfminer
@@ -339,8 +334,20 @@ def carica_dati_esistenti(output_xlsx: str, log_fn) -> Tuple[pd.DataFrame, pd.Da
     if not os.path.isfile(output_xlsx):
         return pd.DataFrame(), pd.DataFrame()
     try:
-        df_g  = pd.read_excel(output_xlsx, sheet_name="Gignese",   engine="openpyxl")
-        df_pa = pd.read_excel(output_xlsx, sheet_name="PuntaAla",  engine="openpyxl")
+        # Leggi Gignese — fallisce solo questo foglio se corrotto
+        try:
+            df_g  = pd.read_excel(output_xlsx, sheet_name="Gignese",   engine="openpyxl")
+        except Exception as e:
+            log_fn(f"[WARN] Impossibile leggere foglio Gignese dall'Excel: {e}")
+            df_g = pd.DataFrame()
+
+        # Leggi PuntaAla — indipendente da Gignese
+        try:
+            df_pa = pd.read_excel(output_xlsx, sheet_name="PuntaAla",  engine="openpyxl")
+        except Exception as e:
+            log_fn(f"[WARN] Impossibile leggere foglio PuntaAla dall'Excel: {e}")
+            df_pa = pd.DataFrame()
+
         df_log = pd.DataFrame()
         try:
             df_log = pd.read_excel(output_xlsx, sheet_name="Log", engine="openpyxl")
@@ -682,19 +689,19 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 def _path_to_cfg(p) -> str:
     """Salva il path relativo alla home, per portabilità tra Mac."""
     try:
-        return str(Path(str(p)).expanduser().resolve().relative_to(Path.home()))
+        return str(_Path(str(p)).expanduser().resolve().relative_to(_Path.home()))
     except ValueError:
         return str(p)
 
 def _path_from_cfg(s: str) -> str:
-    """Ricostruisce il path assoluto: se relativo, prepende Path.home()."""
+    """Ricostruisce il path assoluto: se relativo, prepende _Path.home()."""
     if not s:
         return s
-    p = Path(s)
+    p = _Path(s)
     if p.is_absolute():
         # retrocompatibilità: path assoluto vecchio stile
         return str(p)
-    return str(Path.home() / p)
+    return str(_Path.home() / p)
 
 def carica_ultima_cartella() -> str:
     if os.path.isfile(CONFIG_FILE):
@@ -784,11 +791,18 @@ def avvia_gui():
     txt_log.grid(row=0, column=0, sticky="nsew")
 
     def log_fn(msg: str, newline: bool = True):
-        txt_log.configure(state="normal")
-        txt_log.insert(tk.END, msg + ("\n" if newline else ""))
-        txt_log.see(tk.END)
-        txt_log.configure(state="disabled")
-        root.update_idletasks()
+        """Thread-safe: se chiamata da un worker thread, marshalla via root.after."""
+        def _append():
+            txt_log.configure(state="normal")
+            txt_log.insert(tk.END, msg + ("\n" if newline else ""))
+            txt_log.see(tk.END)
+            txt_log.configure(state="disabled")
+            # Nessuna chiamata a update() o update_idletasks() — non necessaria
+            # e pericolosa se chiamata dal thread UI (rientranza loop eventi)
+        if threading.current_thread() is threading.main_thread():
+            _append()
+        else:
+            root.after(0, _append)
 
     # ── Riga 3: bottoni ──
     frm_btn = ttk.Frame(root, padding=8)
@@ -814,7 +828,8 @@ def avvia_gui():
             except Exception as ex:
                 log_fn(f"[ERRORE CRITICO] {ex}")
             finally:
-                btn_esegui.configure(state="normal")
+                # Re-abilita il pulsante dal thread UI
+                root.after(0, lambda: btn_esegui.configure(state="normal"))
 
         threading.Thread(target=_run, daemon=True).start()
 
