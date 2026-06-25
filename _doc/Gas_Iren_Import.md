@@ -2,7 +2,8 @@
 
 Script Python per l'importazione automatica delle bollette gas Iren (formato PDF) in un file Excel con analisi dettagliate dei consumi e dei parametri contrattuali.
 
-**Autore:** Ignazio Rusconi Clerici — Novembre 2025, aggiornato Marzo 2026
+**Autore:** Ignazio Rusconi Clerici — Novembre 2025  
+**Versione corrente:** v2.1.0 — Aggiornato: 2026-06-25
 
 ---
 
@@ -45,10 +46,22 @@ Si apre una finestra GUI. Non è previsto utilizzo da riga di comando.
 La configurazione viene salvata automaticamente in:
 
 ```
-~/_Config/GasIrenImport/config.json
+~/.config/pyworkspace/GasIrenImport/config.json
 ```
 
 Contiene l'ultimo percorso usato e viene ricaricata ad ogni avvio.
+
+---
+
+## Formati numerici nell'Excel
+
+| Tipo di valore | Formato | Esempio |
+|----------------|---------|---------|
+| Smc (consumi, totali, delta, rolling 12m) | `0.00` | `17.84` |
+| PSV, PCS (prezzi indicizzati) | `0.0000` | `0.3809` |
+| Sconto unitario, Spread | `0.0000` | `0.0571` |
+| Sconto % PSV+Spread | `0.00` | `15.00` |
+| Tutti gli importi € | `0.00` | `30.27` |
 
 ---
 

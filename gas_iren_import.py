@@ -56,8 +56,8 @@ import pdfplumber
 import pandas as pd
 import xlsxwriter  # noqa — necessario per pandas ExcelWriter engine
 
-VERSIONE_SCRIPT = "2.0.0"
-VERSION = "2.0.0"
+VERSIONE_SCRIPT = "2.1.0"
+VERSION = "2.1.0"
 NOME_EXCEL = "Confronto consumi gas (Iren).xlsx"
 NUM_IT = r"-?\d{1,3}(?:\.\d{3})*(?:,\d+)?"
 
@@ -516,12 +516,59 @@ def _header_fmt(wb):
                           "fg_color": HDR_COLOR, "border": 1})
 
 
+# Formati numerici per colonna (nome colonna Excel → formato xlsxwriter)
+_COL_FORMATS: dict[str, str] = {
+    # Smc e derivati
+    "Smc":                    "0.00",
+    "Smc_Gignese":            "0.00",
+    "Smc_PuntaAla":           "0.00",
+    "Smc_totale":             "0.00",
+    "Delta_Gig_meno_PA":      "0.00",
+    "Smc_12m_Gignese":        "0.00",
+    "Smc_12m_PuntaAla":       "0.00",
+    "Delta_12m_Gig_meno_PA":  "0.00",
+    # Prezzi indicizzati: 4 decimali
+    "PSV_€/Smc":              "0.0000",
+    "PCS_€/Smc":              "0.0000",
+    "Sconto_unit_€/Smc":      "0.0000",
+    "Spread_dichiarato_€/Smc":"0.0000",
+    "Spread_calcolato_€/Smc": "0.0000",
+    # Percentuale sconto (valore numerico es. 15.0)
+    "Sconto_%_PSV+Spread":    "0.00",
+    # Importi €: 2 decimali
+    "Quota_fissa_vendita_€":  "0.00",
+    "Quota_consumi_vendita_€":"0.00",
+    "Totale_materia_€":       "0.00",
+    "Spesa_rete+oneri_€":     "0.00",
+    "Accise+IVA_€":           "0.00",
+    "Totale_bolletta_€":      "0.00",
+    "Totale_bolletta_Gignese":"0.00",
+    "Totale_bolletta_PuntaAla":"0.00",
+}
+
+
 def _autofit(ws, df, wb):
-    fmt = _header_fmt(wb)
+    fmt_hdr = _header_fmt(wb)
+    # cache dei formati numerici per non ricrearli ogni volta
+    _fmt_cache: dict[str, object] = {}
+
     for ci, col in enumerate(df.columns):
-        ws.write(0, ci, col, fmt)
+        ws.write(0, ci, col, fmt_hdr)
         w = max([len(str(col))] + [len(str(x)) for x in df[col].astype(str)])
         ws.set_column(ci, ci, min(w, 40) + 2)
+
+        # applica formato numerico alle celle dati se la colonna ha un formato
+        num_fmt_str = _COL_FORMATS.get(col)
+        if num_fmt_str:
+            if num_fmt_str not in _fmt_cache:
+                _fmt_cache[num_fmt_str] = wb.add_format({"num_format": num_fmt_str})
+            num_fmt = _fmt_cache[num_fmt_str]
+            for ri, val in enumerate(df[col]):
+                if val is not None and not (isinstance(val, float) and (val != val)):
+                    try:
+                        ws.write(ri + 1, ci, float(val), num_fmt)
+                    except (TypeError, ValueError):
+                        pass  # testo o None: lascia come scritto da pandas
 
 
 def scrivi_foglio_localita(writer, df_all: pd.DataFrame, localita: str):
