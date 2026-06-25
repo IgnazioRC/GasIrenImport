@@ -3,7 +3,7 @@
 Script Python per l'importazione automatica delle bollette gas Iren (formato PDF) in un file Excel con analisi dettagliate dei consumi e dei parametri contrattuali.
 
 **Autore:** Ignazio Rusconi Clerici — Novembre 2025  
-**Versione corrente:** v2.1.0 — Aggiornato: 2026-06-25
+**Versione corrente:** v2.2.0 — Aggiornato: 2026-06-25
 
 ---
 
@@ -112,6 +112,7 @@ Se l'Excel non esiste, tutti i PDF trovati vengono elaborati e l'Excel viene cre
 | Spesa rete+oneri | Trasporto, gestione contatore e oneri di sistema |
 | Accise+IVA | Imposte totali |
 | Totale bolletta | Importo totale fatturato |
+| **Scost PSV %** | Scostamento % del costo materia rispetto al puro PSV × Smc — cattura l'effetto combinato di quota fissa, spread e sconto |
 
 ---
 
@@ -119,11 +120,29 @@ Se l'Excel non esiste, tutti i PDF trovati vengono elaborati e l'Excel viene cre
 
 | Foglio | Contenuto |
 |---|---|
-| **Gignese** | Tutte le bollette di Gignese, ordinate per data |
-| **PuntaAla** | Tutte le bollette di Punta Ala, ordinate per data |
-| **Confronto Mensile** | Smc e totale bolletta per mese, entrambe le località affiancate, ordine cronologico |
-| **Confronto Annuale** | Consumo rolling 12 mesi per entrambe le località |
-| **Log** | Storico completo di tutte le elaborazioni con esito per ogni PDF |
+| **Gignese** | Tutte le bollette di Gignese, ordinate per data, con colonna Scost_PSV_% |
+| **PuntaAla** | Tutte le bollette di Punta Ala, ordinate per data, con colonna Scost_PSV_% |
+| **Confronto Mensile** | Smc e totale bolletta per mese, entrambe le località affiancate |
+| **Confronto Annuale** | Rolling 12 mesi: Smc, totale bolletta e prezzo medio €/Smc per entrambe le località |
+
+Il foglio **Log** è stato rimosso dall'Excel — il log completo viene scritto su file in `~/Documents/log/GasIrenImport/<timestamp>.log`.
+
+---
+
+## Log su file
+
+Il log di ogni sessione viene scritto in:
+
+```
+~/Documents/log/GasIrenImport/<timestamp>.log
+```
+
+Formato:
+```
+2026-06-25 10:30:00 | INFO    | GasIrenImport | Avvio GasIrenImport v2.2.0 ...
+2026-06-25 10:30:01 | INFO    | GasIrenImport | Gignese | giu-25 | OK | Aggiunta
+2026-06-25 10:30:01 | WARNING | GasIrenImport | Gignese | lug-25 | SKIP | ...
+```
 
 ---
 

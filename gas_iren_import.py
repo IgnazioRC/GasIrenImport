@@ -4,6 +4,13 @@
 gas_iren_import.py — Confronto consumi gas IREN Premium Top PSV
 Ignazio Rusconi-Clerici + ChatGPT + Claude
 
+Versione 2.2.0 — Giugno 2026
+  • Formati numerici Excel: 0.00 per Smc e €, 0.0000 per PSV/PCS/spread
+  • Log su file in ~/Documents/log/GasIrenImport/ (rimosso foglio Log dall'Excel)
+  • Nuove colonne: Scost_PSV_% nei fogli località
+  • Confronto Annuale: aggiunto Totale_bolletta_12m_Gignese/PuntaAla e
+    Prezzo_medio_€Smc_Gignese/PuntaAla (rolling 12 mesi)
+
 Versione 2.0.0 — Marzo 2026
   • GUI tkinter: selezione cartella base, log scrollabile, bottoni Esegui/Esci
   • Backup automatico: Confronto consumi gas (Iren).bak.YYYYMMDD.xlsx
@@ -56,10 +63,40 @@ import pdfplumber
 import pandas as pd
 import xlsxwriter  # noqa — necessario per pandas ExcelWriter engine
 
-VERSIONE_SCRIPT = "2.1.0"
-VERSION = "2.1.0"
+VERSIONE_SCRIPT = "2.2.0"
+VERSION = "2.2.0"
 NOME_EXCEL = "Confronto consumi gas (Iren).xlsx"
 NUM_IT = r"-?\d{1,3}(?:\.\d{3})*(?:,\d+)?"
+
+APP_NAME = "GasIrenImport"
+
+# ─────────────────────────────────────────────
+#  LOGGER SU FILE
+# ─────────────────────────────────────────────
+
+def _setup_file_logger() -> logging.Logger:
+    """
+    Crea un logger che scrive in ~/Documents/log/GasIrenImport/<timestamp>.log
+    Convenzione IRC standard: una sottocartella per app, nome file = timestamp.
+    """
+    log_dir = _Path.home() / "Documents" / "log" / APP_NAME
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"{ts}.log"
+
+    logger = logging.getLogger(APP_NAME)
+    logger.setLevel(logging.DEBUG)
+    if not logger.handlers:
+        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+        logger.addHandler(fh)
+    logger.info(f"=== Sessione {APP_NAME} avviata - log: {log_file} ===")
+    return logger
+
+_log = _setup_file_logger()
 
 
 # ─────────────────────────────────────────────
@@ -495,6 +532,17 @@ def unisci_e_ordina(df_esistente: pd.DataFrame, df_nuove: pd.DataFrame) -> pd.Da
     sort_cols = [c for c in ["localita", "anno", "mese_num"] if c in df.columns]
     if sort_cols:
         df = df.sort_values(by=sort_cols)
+
+    # Calcola Scostamento PSV % = (Totale_materia - PSV * Smc) / (PSV * Smc) * 100
+    # Misura quanto il costo materia si discosta dal puro PSV * consumi
+    # (cattura effetto quota fissa, spread e sconto in termini percentuali)
+    if all(c in df.columns for c in ["totale_materia", "psv", "smc"]):
+        base_psv = df["psv"] * df["smc"]
+        scost = (df["totale_materia"] - base_psv) / base_psv * 100
+        # Sostituisce inf/-inf con NaN (compatibile con tutte le versioni pandas)
+        scost = scost.replace([float("inf"), float("-inf")], float("nan"))
+        df["scost_psv_pct"] = scost.where(base_psv > 0)
+
     return df
 
 
@@ -535,6 +583,8 @@ _COL_FORMATS: dict[str, str] = {
     "Spread_calcolato_€/Smc": "0.0000",
     # Percentuale sconto (valore numerico es. 15.0)
     "Sconto_%_PSV+Spread":    "0.00",
+    # Scostamento PSV %: 2 decimali
+    "Scost_PSV_%":            "0.00",
     # Importi €: 2 decimali
     "Quota_fissa_vendita_€":  "0.00",
     "Quota_consumi_vendita_€":"0.00",
@@ -544,6 +594,11 @@ _COL_FORMATS: dict[str, str] = {
     "Totale_bolletta_€":      "0.00",
     "Totale_bolletta_Gignese":"0.00",
     "Totale_bolletta_PuntaAla":"0.00",
+    # Rolling 12m bolletta e prezzo medio
+    "Totale_bolletta_12m_Gignese":  "0.00",
+    "Totale_bolletta_12m_PuntaAla": "0.00",
+    "Prezzo_medio_€Smc_Gignese":    "0.00",
+    "Prezzo_medio_€Smc_PuntaAla":   "0.00",
 }
 
 
@@ -585,6 +640,7 @@ def scrivi_foglio_localita(writer, df_all: pd.DataFrame, localita: str):
         ("spesa_rete_oneri", "Spesa_rete+oneri_€"),
         ("accise_iva", "Accise+IVA_€"),
         ("totale_bolletta", "Totale_bolletta_€"),
+        ("scost_psv_pct", "Scost_PSV_%"),
         ("file_pdf", "File_pdf"),
     ]
     if df_loc.empty:
@@ -622,24 +678,43 @@ def scrivi_foglio_confronto_mensile(writer, df_all: pd.DataFrame):
 
 def scrivi_foglio_confronto_annuale(writer, df_all: pd.DataFrame):
     if df_all.empty:
-        df = pd.DataFrame(columns=["Periodo", "Smc_12m_Gignese",
-                                   "Smc_12m_PuntaAla", "Delta_12m_Gig_meno_PA"])
+        df = pd.DataFrame(columns=["Periodo", "Smc_12m_Gignese", "Smc_12m_PuntaAla",
+                                   "Delta_12m_Gig_meno_PA",
+                                   "Totale_bolletta_12m_Gignese", "Totale_bolletta_12m_PuntaAla",
+                                   "Prezzo_medio_€Smc_Gignese", "Prezzo_medio_€Smc_PuntaAla"])
     else:
         base = df_all.dropna(subset=["anno", "mese_num", "periodo_label"]).copy()
         agg  = base.groupby(["localita", "anno", "mese_num", "periodo_label"]).agg(
-                    smc=("smc", "sum")).reset_index()
+                    smc=("smc", "sum"),
+                    totale_bolletta=("totale_bolletta", "sum")).reset_index()
         agg  = agg.sort_values(["localita", "anno", "mese_num"])
+
         agg["Smc_12m"] = (agg.groupby("localita")["smc"]
                            .rolling(12, min_periods=1).sum()
                            .reset_index(level=0, drop=True))
-        pivo = agg.pivot(index=["anno", "mese_num", "periodo_label"],
-                         columns="localita", values="Smc_12m")
-        df = pd.DataFrame(index=pivo.index)
-        df["Periodo"]           = df.index.get_level_values("periodo_label")
-        df["Smc_12m_Gignese"]   = pivo.get("Gignese")
-        df["Smc_12m_PuntaAla"]  = pivo.get("PuntaAla")
-        df["Delta_12m_Gig_meno_PA"] = (df["Smc_12m_Gignese"].fillna(0)
-                                        - df["Smc_12m_PuntaAla"].fillna(0))
+        agg["Bolletta_12m"] = (agg.groupby("localita")["totale_bolletta"]
+                                .rolling(12, min_periods=1).sum()
+                                .reset_index(level=0, drop=True))
+        # Prezzo medio €/Smc rolling 12 mesi
+        agg["Prezzo_medio"] = (agg["Bolletta_12m"] / agg["Smc_12m"]).where(agg["Smc_12m"] > 0)
+
+        pivo_smc  = agg.pivot(index=["anno", "mese_num", "periodo_label"],
+                               columns="localita", values="Smc_12m")
+        pivo_boll = agg.pivot(index=["anno", "mese_num", "periodo_label"],
+                               columns="localita", values="Bolletta_12m")
+        pivo_pm   = agg.pivot(index=["anno", "mese_num", "periodo_label"],
+                               columns="localita", values="Prezzo_medio")
+
+        df = pd.DataFrame(index=pivo_smc.index)
+        df["Periodo"]                       = df.index.get_level_values("periodo_label")
+        df["Smc_12m_Gignese"]               = pivo_smc.get("Gignese")
+        df["Smc_12m_PuntaAla"]              = pivo_smc.get("PuntaAla")
+        df["Delta_12m_Gig_meno_PA"]         = (df["Smc_12m_Gignese"].fillna(0)
+                                                - df["Smc_12m_PuntaAla"].fillna(0))
+        df["Totale_bolletta_12m_Gignese"]   = pivo_boll.get("Gignese")
+        df["Totale_bolletta_12m_PuntaAla"]  = pivo_boll.get("PuntaAla")
+        df["Prezzo_medio_€Smc_Gignese"]     = pivo_pm.get("Gignese")
+        df["Prezzo_medio_€Smc_PuntaAla"]    = pivo_pm.get("PuntaAla")
         df = df.reset_index(drop=True)
     df.to_excel(writer, sheet_name="Confronto Annuale", index=False)
     _autofit(writer.sheets["Confronto Annuale"], df, writer.book)
@@ -653,13 +728,12 @@ def scrivi_foglio_log(writer, df_log: pd.DataFrame):
     _autofit(writer.sheets["Log"], df_log, writer.book)
 
 
-def salva_excel(df_all: pd.DataFrame, df_log: pd.DataFrame, output_xlsx: str):
+def salva_excel(df_all: pd.DataFrame, output_xlsx: str):
     with pd.ExcelWriter(output_xlsx, engine="xlsxwriter") as writer:
         scrivi_foglio_localita(writer, df_all, "Gignese")
         scrivi_foglio_localita(writer, df_all, "PuntaAla")
         scrivi_foglio_confronto_mensile(writer, df_all)
         scrivi_foglio_confronto_annuale(writer, df_all)
-        scrivi_foglio_log(writer, df_log)
 
 
 # ─────────────────────────────────────────────
@@ -669,9 +743,11 @@ def salva_excel(df_all: pd.DataFrame, df_log: pd.DataFrame, output_xlsx: str):
 def esegui(base_dir: str, log_fn):
     """
     Funzione principale richiamata dalla GUI (in un thread separato).
-    log_fn(msg, newline=True) scrive nel pannello log.
+    log_fn(msg) scrive nel pannello log della GUI.
+    Il log su file viene scritto tramite _log (logger Python standard).
     """
     output_xlsx = os.path.join(base_dir, NOME_EXCEL)
+    _log.info(f"Avvio {APP_NAME} v{VERSIONE_SCRIPT} — base={base_dir}, out={output_xlsx}")
     log_fn(f"[START] Script v{VERSIONE_SCRIPT}")
     log_fn(f"[DIR]   {base_dir}")
 
@@ -691,34 +767,39 @@ def esegui(base_dir: str, log_fn):
                 str(row.get("periodo_label", "")) if pd.notna(row.get("periodo_label")) else None,
             )
             chiavi_esistenti.add(k)
+        _log.info(f"{len(chiavi_esistenti)} chiavi esistenti lette dall'Excel")
         log_fn(f"[INFO]  Chiavi esistenti: {len(chiavi_esistenti)}")
 
     # 4. Scansiona PDF e prendi solo le bollette nuove
     log_fn("[SCAN]  Scansione PDF...")
     righe_nuove, logs_nuovi = raccogli_bollette_nuove(base_dir, chiavi_esistenti, log_fn)
+    _log.info(f"Bollette nuove trovate: {len(righe_nuove)}")
     log_fn(f"[INFO]  Bollette nuove trovate: {len(righe_nuove)}")
+
+    # Log bollette su file
+    for entry in logs_nuovi:
+        lvl = logging.INFO if entry.esito == "OK" else logging.WARNING
+        _log.log(lvl, f"{entry.localita} | {entry.periodo_label} | {entry.esito} | {entry.messaggio}")
 
     # 5. Unisci dati
     df_nuove = df_da_righe(righe_nuove)
     df_all   = unisci_e_ordina(df_esistente, df_nuove)
 
-    # Log: accoda nuovi log a quelli storici
-    df_log_nuovi = logs_to_dataframe(logs_nuovi)
-    df_log_all   = pd.concat([f for f in [df_log_esistente, df_log_nuovi] if not f.empty],
-                              ignore_index=True)
-
-    # 6. Salva
-    salva_excel(df_all, df_log_all, output_xlsx)
+    # 6. Salva (senza foglio Log — il log è su file)
+    salva_excel(df_all, output_xlsx)
     n_tot = len(df_all)
+    _log.info(f"Excel salvato: {os.path.basename(output_xlsx)} ({n_tot} righe totali)")
     log_fn(f"[OK]    Excel aggiornato: {os.path.basename(output_xlsx)}  ({n_tot} righe totali)")
 
     # 7. Riepilogo spread
     if not df_all.empty and "spread_ok" in df_all.columns:
-        n_ok  = int((df_all["spread_ok"] == "OK").sum())
+        n_ok   = int((df_all["spread_ok"] == "OK").sum())
         n_tot2 = int(len(df_all))
+        _log.info(f"Spread OK: {n_ok}/{n_tot2} bollette compatibili con spread=0")
         log_fn(f"[INFO]  Spread OK: {n_ok}/{n_tot2} bollette compatibili con spread=0")
 
     log_fn("[FINE]  Elaborazione completata.")
+    _log.info("Elaborazione completata.")
 
 
 # ─────────────────────────────────────────────
